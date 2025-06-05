@@ -77,3 +77,5 @@ config.ini
 # Cache
 .cache/
 *.cache
+# Environment variables
+.env
