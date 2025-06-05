@@ -14,5 +14,10 @@ spacy>=3.7.0
 keybert>=0.8.0
 scikit-learn>=1.3.0
 
+# GPU support
+torch>=2.0.0  # For GPU acceleration
+sentence-transformers>=2.2.0  # For KeyBERT GPU models
+
 # Additional utilities
 python-dotenv>=1.0.0
+psutil>=5.9.0  # For memory monitoring

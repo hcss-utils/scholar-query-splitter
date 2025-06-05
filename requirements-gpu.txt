@@ -1,0 +1,16 @@
+# GPU-specific requirements for RTX 4090
+# Install these AFTER the base requirements.txt
+
+# CUDA 12.x support (for RTX 4090)
+# Note: Choose the right version based on your CUDA version
+# Check with: nvidia-smi
+
+# For CUDA 12.x (most RTX 4090 systems)
+cupy-cuda12x>=12.0.0
+
+# For spaCy GPU support
+spacy[cuda12x]>=3.7.0
+
+# Optional: For even better GPU utilization
+# Uncomment if you have enough disk space
+# spacy[cuda12x,transformers]>=3.7.0

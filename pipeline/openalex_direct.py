@@ -8,7 +8,7 @@ using direct REST API calls instead of the pyalex wrapper.
 import json
 import logging
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import time
 
@@ -42,7 +42,7 @@ class OpenAlexDownloader:
         })
     
     def download_metadata(self, query: str, max_results: int = 1000, 
-                         per_page: int = 200) -> List[Dict[str, Any]]:
+                         per_page: int = 200, year_range: Optional[Tuple[int, int]] = None) -> List[Dict[str, Any]]:
         """
         Download metadata from OpenAlex for a given query.
         
@@ -66,6 +66,10 @@ class OpenAlexDownloader:
             "per-page": per_page,
             "cursor": cursor
         }
+        
+        # Add year range filter if provided
+        if year_range:
+            params["filter"] += f",publication_year:{year_range[0]}-{year_range[1]}"
         
         # Add email if provided (for polite pool)
         if self.email:

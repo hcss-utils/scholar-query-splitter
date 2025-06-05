@@ -31,7 +31,7 @@ class QueryGenerator:
     
     def generate_subqueries(self, 
                            base_query: str,
-                           modifiers: Dict[str, List[Tuple[str, float]]],
+                           modifiers: Dict[str, List[Tuple[str, Any]]],
                            start_year: Optional[int] = None,
                            end_year: Optional[int] = None,
                            year_ranges: Optional[List[Tuple[int, int]]] = None,
@@ -98,7 +98,7 @@ class QueryGenerator:
         logger.info(f"Generated {len(queries)} subqueries")
         return queries
     
-    def _prepare_modifiers(self, modifiers: Dict[str, List[Tuple[str, float]]]) -> List[Tuple[str, float, str]]:
+    def _prepare_modifiers(self, modifiers: Dict[str, List[Tuple[str, Any]]]) -> List[Tuple[str, float, str]]:
         """
         Prepare and combine modifiers from different sources.
         
@@ -111,16 +111,25 @@ class QueryGenerator:
         all_modifiers = []
         
         # Add keywords
-        for keyword, score in modifiers.get('keywords', []):
-            cleaned = self._clean_modifier(keyword)
-            if cleaned:
-                all_modifiers.append((cleaned, score, 'keyword'))
+        for item in modifiers.get('keywords', []):
+            if len(item) == 2:
+                keyword, score = item
+                cleaned = self._clean_modifier(keyword)
+                if cleaned:
+                    all_modifiers.append((cleaned, score, 'keyword'))
         
-        # Add entities
-        for entity, score in modifiers.get('entities', []):
-            cleaned = self._clean_modifier(entity)
-            if cleaned:
-                all_modifiers.append((cleaned, score, 'entity'))
+        # Add entities (handle both old and new format)
+        for item in modifiers.get('entities', []):
+            if len(item) == 3:  # New format: (entity, entity_type, score)
+                entity, entity_type, score = item
+                cleaned = self._clean_modifier(entity)
+                if cleaned:
+                    all_modifiers.append((cleaned, score, f'entity:{entity_type}'))
+            elif len(item) == 2:  # Old format: (entity, score)
+                entity, score = item
+                cleaned = self._clean_modifier(entity)
+                if cleaned:
+                    all_modifiers.append((cleaned, score, 'entity'))
         
         # Sort by score (descending)
         all_modifiers.sort(key=lambda x: x[1], reverse=True)

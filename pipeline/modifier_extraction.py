@@ -9,11 +9,17 @@ import logging
 from typing import List, Dict, Any, Set, Tuple
 from collections import Counter
 import re
+import json
+from pathlib import Path
+from datetime import datetime
+import os
 
 import spacy
 from keybert import KeyBERT
 from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 from tqdm import tqdm
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +27,38 @@ logger = logging.getLogger(__name__)
 class ModifierExtractor:
     """Extracts key phrases and named entities from text metadata."""
     
-    def __init__(self, spacy_model: str = "en_core_web_sm"):
+    def __init__(self, spacy_model: str = "en_core_web_sm", 
+                 use_gpu: bool = True,
+                 output_dir: str = "outputs"):
         """
         Initialize the modifier extractor.
         
         Args:
             spacy_model: Name of the spaCy model to use
+            use_gpu: Whether to use GPU if available
+            output_dir: Directory for intermediate outputs
         """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        
+        # Check GPU availability
+        self.use_gpu = use_gpu and torch.cuda.is_available()
+        if self.use_gpu:
+            logger.info(f"🚀 GPU detected: {torch.cuda.get_device_name(0)}")
+            logger.info(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        else:
+            logger.info("Running on CPU")
+        
         logger.info(f"Loading spaCy model: {spacy_model}")
         try:
+            # Enable GPU for spaCy if available
+            if self.use_gpu:
+                try:
+                    spacy.require_gpu()
+                    logger.info("✓ spaCy GPU acceleration enabled")
+                except ValueError as e:
+                    logger.warning(f"spaCy GPU acceleration not available: {e}")
+                    logger.warning("Continuing with CPU for spaCy. Install cupy-cuda12x for GPU support.")
             self.nlp = spacy.load(spacy_model)
         except OSError:
             logger.warning(f"Model {spacy_model} not found. Downloading...")
@@ -38,7 +67,13 @@ class ModifierExtractor:
             self.nlp = spacy.load(spacy_model)
         
         logger.info("Initializing KeyBERT")
-        self.kw_model = KeyBERT()
+        # Use GPU-accelerated BERT model if available
+        if self.use_gpu:
+            # Use a model that works well with GPU
+            self.kw_model = KeyBERT(model='all-MiniLM-L12-v2')
+            logger.info("✓ KeyBERT initialized with GPU-accelerated model")
+        else:
+            self.kw_model = KeyBERT()
         
         # Entity types to extract
         self.entity_types = {'ORG', 'GPE', 'PERSON', 'FAC', 'LOC', 'EVENT'}
@@ -47,12 +82,22 @@ class ModifierExtractor:
         self.stop_phrases = {
             'case study', 'literature review', 'systematic review',
             'meta analysis', 'research paper', 'conference paper',
-            'journal article', 'working paper', 'technical report'
+            'journal article', 'working paper', 'technical report',
+            'empirical study', 'theoretical framework', 'research methodology'
         }
+        
+        # Additional stopwords beyond sklearn's default
+        self.custom_stopwords = {
+            'approach', 'analysis', 'study', 'research', 'paper',
+            'article', 'review', 'using', 'based', 'towards'
+        }
+        
+        # Combine all stopwords
+        self.all_stopwords = set(ENGLISH_STOP_WORDS) | self.custom_stopwords
     
     def extract_modifiers(self, metadata_list: List[Dict[str, Any]], 
                          top_k_keywords: int = 20,
-                         top_k_entities: int = 20) -> Dict[str, List[Tuple[str, float]]]:
+                         top_k_entities: int = 20) -> Dict[str, List[Tuple[str, Any]]]:
         """
         Extract modifiers from a list of metadata.
         
@@ -65,10 +110,17 @@ class ModifierExtractor:
             Dictionary with 'keywords' and 'entities' lists
         """
         logger.info(f"Extracting modifiers from {len(metadata_list)} documents")
+        print(f"\n{'='*60}")
+        print(f"MODIFIER EXTRACTION PIPELINE")
+        print(f"{'='*60}")
+        print(f"📊 Documents to process: {len(metadata_list)}")
+        print(f"🖥️  Hardware: {'GPU (' + torch.cuda.get_device_name(0) + ')' if self.use_gpu else 'CPU'}")
+        print(f"💾 RAM Available: {self._get_memory_info()}")
+        print(f"{'='*60}\n")
         
         # Collect all text
         all_texts = []
-        for metadata in tqdm(metadata_list, desc="Processing documents"):
+        for metadata in tqdm(metadata_list, desc="📝 Processing documents"):
             text = self._prepare_text(metadata)
             if text:
                 all_texts.append(text)
@@ -76,19 +128,41 @@ class ModifierExtractor:
         logger.info(f"Prepared {len(all_texts)} text documents")
         
         # Extract keywords using KeyBERT
-        print(f"\n--- Keyword Extraction Phase ---")
+        print(f"\n{'='*50}")
+        print(f"🔑 KEYWORD EXTRACTION PHASE")
+        print(f"{'='*50}")
         keywords = self._extract_keywords(all_texts, top_k_keywords)
-        print(f"✓ Extracted {len(keywords)} keywords")
+        print(f"✅ Extracted {len(keywords)} keywords")
+        
+        # Save keywords incrementally
+        keywords_file = self.output_dir / f"keywords_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(keywords_file, 'w') as f:
+            json.dump(keywords, f, indent=2)
+        print(f"💾 Keywords saved to: {keywords_file}")
         
         # Extract named entities using spaCy
-        print(f"\n--- Named Entity Extraction Phase ---")
+        print(f"\n{'='*50}")
+        print(f"🏷️  NAMED ENTITY EXTRACTION PHASE")
+        print(f"{'='*50}")
         entities = self._extract_entities(all_texts, top_k_entities)
-        print(f"✓ Extracted {len(entities)} entities")
+        print(f"✅ Extracted {len(entities)} unique entities")
+        
+        # Save entities incrementally
+        entities_file = self.output_dir / f"entities_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(entities_file, 'w') as f:
+            json.dump(entities, f, indent=2)
+        print(f"💾 Entities saved to: {entities_file}")
         
         return {
             'keywords': keywords,
             'entities': entities
         }
+    
+    def _get_memory_info(self) -> str:
+        """Get memory information."""
+        import psutil
+        mem = psutil.virtual_memory()
+        return f"{mem.available / 1e9:.1f} GB / {mem.total / 1e9:.1f} GB"
     
     def _prepare_text(self, metadata: Dict[str, Any]) -> str:
         """
@@ -165,40 +239,80 @@ class ModifierExtractor:
             List of (keyword, score) tuples
         """
         logger.info("Extracting keywords with KeyBERT")
+        print(f"📋 Configuration:")
+        print(f"   - N-gram range: (1, 2) - Uni/Bi-grams only")
+        print(f"   - Diversity: 0.5 (MMR)")
+        print(f"   - Stopword filtering: Enabled")
+        print(f"   - Custom stopwords: {len(self.all_stopwords)} words")
         
-        # Combine all texts with progress bar
-        print("Combining texts for keyword extraction...")
-        combined_text = ' '.join(tqdm(texts, desc="Combining texts", unit="docs"))
+        # Process in batches for better memory usage
+        batch_size = 100 if self.use_gpu else 50
+        all_keywords = []
         
-        # Use n-gram range to capture phrases
-        print("Creating vectorizer...")
-        vectorizer = CountVectorizer(ngram_range=(1, 3), stop_words='english')
+        print(f"\n🔄 Processing in batches of {batch_size} documents...")
         
-        try:
-            # Extract keywords
-            print(f"Extracting top {top_k * 2} keywords (will filter to {top_k})...")
-            keywords = self.kw_model.extract_keywords(
-                combined_text,
-                vectorizer=vectorizer,
-                top_n=top_k * 2,  # Extract more initially for filtering
-                use_mmr=True,  # Use Maximal Marginal Relevance for diversity
-                diversity=0.5
+        for i in tqdm(range(0, len(texts), batch_size), desc="🔑 Extracting keywords"):
+            batch_texts = texts[i:i + batch_size]
+            combined_batch = ' '.join(batch_texts)
+            
+            # Create custom vectorizer with stopwords - ONLY UNI/BI-GRAMS
+            vectorizer = CountVectorizer(
+                ngram_range=(1, 2),  # Changed from (1,3) to (1,2) for uni/bi-grams only
+                stop_words=list(self.all_stopwords),
+                max_features=10000  # Limit features for memory efficiency
             )
             
-            # Filter out stop phrases
-            filtered_keywords = []
-            for keyword, score in keywords:
-                if not any(stop in keyword.lower() for stop in self.stop_phrases):
-                    filtered_keywords.append((keyword, score))
-            
-            # Return top k
-            return filtered_keywords[:top_k]
-            
-        except Exception as e:
-            logger.error(f"Error extracting keywords: {e}")
-            return []
+            try:
+                # Extract keywords
+                batch_keywords = self.kw_model.extract_keywords(
+                    combined_batch,
+                    vectorizer=vectorizer,
+                    top_n=top_k * 3,  # Extract more for better filtering
+                    use_mmr=True,  # Use Maximal Marginal Relevance for diversity
+                    diversity=0.5,
+                    nr_candidates=50  # Increase candidate pool
+                )
+                
+                # Filter and add to results
+                for keyword, score in batch_keywords:
+                    # Additional filtering
+                    if (not any(stop in keyword.lower() for stop in self.stop_phrases) and
+                        len(keyword) > 3 and  # Minimum length
+                        not keyword.isdigit()):  # No pure numbers
+                        all_keywords.append((keyword, score))
+                
+                # Log progress
+                if (i + batch_size) % 500 == 0:
+                    print(f"   ✓ Processed {min(i + batch_size, len(texts))} / {len(texts)} documents")
+                    
+            except Exception as e:
+                logger.error(f"Error in batch {i}: {e}")
+                continue
+        
+        # Aggregate and sort keywords
+        keyword_scores = Counter()
+        for keyword, score in all_keywords:
+            keyword_scores[keyword] += score
+        
+        # Normalize scores and get top k
+        total_score = sum(keyword_scores.values())
+        final_keywords = []
+        
+        print(f"\n📊 Keyword statistics:")
+        print(f"   - Total unique keywords found: {len(keyword_scores)}")
+        
+        for keyword, score in keyword_scores.most_common(top_k):
+            normalized_score = score / total_score if total_score > 0 else 0
+            final_keywords.append((keyword, normalized_score))
+        
+        # Print top 10 keywords
+        print(f"\n🏆 Top 10 keywords:")
+        for i, (keyword, score) in enumerate(final_keywords[:10], 1):
+            print(f"   {i:2d}. {keyword:<30} (score: {score:.4f})")
+        
+        return final_keywords
     
-    def _extract_entities(self, texts: List[str], top_k: int) -> List[Tuple[str, float]]:
+    def _extract_entities(self, texts: List[str], top_k: int) -> List[Tuple[str, str, float]]:
         """
         Extract named entities from texts using spaCy.
         
@@ -207,40 +321,86 @@ class ModifierExtractor:
             top_k: Number of entities to extract
             
         Returns:
-            List of (entity, frequency) tuples
+            List of (entity, entity_type, frequency) tuples
         """
         logger.info("Extracting named entities with spaCy")
+        print(f"📋 Configuration:")
+        print(f"   - Entity types: {', '.join(sorted(self.entity_types))}")
+        print(f"   - Min entity length: 3 characters")
+        print(f"   - Batch processing: Enabled")
         
         entity_counter = Counter()
+        entity_types = {}  # Store entity types
+        
+        # Optimize batch size based on available memory
+        batch_size = 200 if self.use_gpu else 100
+        n_batches = (len(texts) + batch_size - 1) // batch_size
+        
+        print(f"\n🔄 Processing {len(texts)} texts in {n_batches} batches...")
         
         # Process texts in batches
-        batch_size = 100
-        n_batches = (len(texts) + batch_size - 1) // batch_size
-        print(f"Processing {len(texts)} texts in {n_batches} batches...")
-        
-        for i in tqdm(range(0, len(texts), batch_size), desc="Extracting entities", total=n_batches):
+        for i in tqdm(range(0, len(texts), batch_size), desc="🏷️  Extracting entities", total=n_batches):
             batch = texts[i:i + batch_size]
-            docs = self.nlp.pipe(batch, disable=['parser', 'lemmatizer'])
+            
+            # Use pipe for batch processing with optimal settings
+            docs = self.nlp.pipe(
+                batch, 
+                disable=['parser', 'lemmatizer', 'textcat'],  # Only keep NER
+                batch_size=batch_size,
+                n_process=4 if not self.use_gpu else 1  # Multi-processing on CPU
+            )
             
             for doc in docs:
                 for ent in doc.ents:
                     if ent.label_ in self.entity_types:
                         # Normalize entity text
                         entity_text = ent.text.strip()
-                        if len(entity_text) > 2:  # Filter very short entities
+                        
+                        # Apply filters
+                        if (len(entity_text) > 2 and  # Min length
+                            not entity_text.lower() in self.all_stopwords and  # Not a stopword
+                            not entity_text.isdigit() and  # Not pure numbers
+                            not all(c in '.-_' for c in entity_text)):  # Not just punctuation
+                            
                             entity_counter[entity_text] += 1
+                            entity_types[entity_text] = ent.label_  # Store entity type
+            
+            # Log progress
+            if (i + batch_size) % 1000 == 0:
+                print(f"   ✓ Processed {min(i + batch_size, len(texts))} / {len(texts)} texts")
+                print(f"   📊 Unique entities so far: {len(entity_counter)}")
         
-        # Convert to list with normalized scores
+        # Convert to list with normalized scores and entity types
         total = sum(entity_counter.values())
         entities = []
+        
+        print(f"\n📊 Entity statistics:")
+        print(f"   - Total entities found: {total}")
+        print(f"   - Unique entities: {len(entity_counter)}")
+        
+        # Count by type
+        type_counts = Counter()
+        for entity, count in entity_counter.most_common():
+            type_counts[entity_types[entity]] += count
+        
+        print(f"\n📈 Entities by type:")
+        for ent_type, count in sorted(type_counts.items()):
+            print(f"   - {ent_type:<8}: {count:5d} ({count/total*100:5.1f}%)")
+        
+        # Create final list with entity types
         for entity, count in entity_counter.most_common(top_k):
             score = count / total if total > 0 else 0
-            entities.append((entity, score))
+            entities.append((entity, entity_types[entity], score))
+        
+        # Print top 10 entities
+        print(f"\n🏆 Top 10 entities:")
+        for i, (entity, ent_type, score) in enumerate(entities[:10], 1):
+            print(f"   {i:2d}. {entity:<25} [{ent_type:<7}] (freq: {score:.4f})")
         
         return entities
     
-    def filter_modifiers(self, modifiers: Dict[str, List[Tuple[str, float]]],
-                        base_query: str) -> Dict[str, List[Tuple[str, float]]]:
+    def filter_modifiers(self, modifiers: Dict[str, List[Tuple[str, Any]]],
+                        base_query: str) -> Dict[str, List[Tuple[str, Any]]]:
         """
         Filter modifiers to remove those already in the base query.
         
@@ -254,14 +414,28 @@ class ModifierExtractor:
         base_query_lower = base_query.lower()
         filtered = {'keywords': [], 'entities': []}
         
+        print(f"\n🔍 Filtering modifiers...")
+        initial_keywords = len(modifiers.get('keywords', []))
+        initial_entities = len(modifiers.get('entities', []))
+        
         # Filter keywords
-        for keyword, score in modifiers.get('keywords', []):
+        for item in modifiers.get('keywords', []):
+            keyword, score = item
             if keyword.lower() not in base_query_lower:
                 filtered['keywords'].append((keyword, score))
         
-        # Filter entities
-        for entity, score in modifiers.get('entities', []):
-            if entity.lower() not in base_query_lower:
-                filtered['entities'].append((entity, score))
+        # Filter entities (handle both old and new format)
+        for item in modifiers.get('entities', []):
+            if len(item) == 3:  # New format with entity type
+                entity, ent_type, score = item
+                if entity.lower() not in base_query_lower:
+                    filtered['entities'].append((entity, ent_type, score))
+            else:  # Old format without entity type
+                entity, score = item
+                if entity.lower() not in base_query_lower:
+                    filtered['entities'].append((entity, score))
+        
+        print(f"   - Keywords: {initial_keywords} → {len(filtered['keywords'])} (filtered {initial_keywords - len(filtered['keywords'])})")
+        print(f"   - Entities: {initial_entities} → {len(filtered['entities'])} (filtered {initial_entities - len(filtered['entities'])})")
         
         return filtered

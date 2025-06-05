@@ -124,6 +124,12 @@ def parse_arguments():
     )
     
     parser.add_argument(
+        "--use-gpu",
+        action="store_true",
+        help="Use GPU acceleration if available (recommended for RTX 4090)"
+    )
+    
+    parser.add_argument(
         "--output-csv",
         default="query_results.csv",
         help="Output CSV file name (default: query_results.csv)"
@@ -197,7 +203,10 @@ def main():
         
         # Step 2: Extract modifiers
         logger.info("\n--- Step 2: Extracting modifiers ---")
-        extractor = ModifierExtractor(spacy_model=args.spacy_model)
+        extractor = ModifierExtractor(
+            spacy_model=args.spacy_model,
+            use_gpu=args.use_gpu
+        )
         
         modifiers = extractor.extract_modifiers(
             metadata_list,
@@ -217,8 +226,13 @@ def main():
             logger.info(f"  - {keyword}: {score:.3f}")
         
         logger.info("\nTop Entities:")
-        for entity, score in modifiers['entities'][:5]:
-            logger.info(f"  - {entity}: {score:.3f}")
+        for item in modifiers['entities'][:5]:
+            if len(item) == 3:  # New format with entity type
+                entity, ent_type, score = item
+                logger.info(f"  - {entity} [{ent_type}]: {score:.3f}")
+            else:  # Old format
+                entity, score = item
+                logger.info(f"  - {entity}: {score:.3f}")
         
         # Step 3: Generate subqueries
         logger.info("\n--- Step 3: Generating subqueries ---")
