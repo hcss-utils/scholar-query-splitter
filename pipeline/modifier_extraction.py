@@ -6,7 +6,7 @@ and abstracts to use as query modifiers.
 """
 
 import logging
-from typing import List, Dict, Any, Set, Tuple
+from typing import List, Dict, Any, Set, Tuple, Optional
 from collections import Counter
 import re
 import json
@@ -97,7 +97,8 @@ class ModifierExtractor:
     
     def extract_modifiers(self, metadata_list: List[Dict[str, Any]], 
                          top_k_keywords: int = 20,
-                         top_k_entities: int = 20) -> Dict[str, List[Tuple[str, Any]]]:
+                         top_k_entities: int = 20,
+                         force_regenerate: bool = False) -> Dict[str, List[Tuple[str, Any]]]:
         """
         Extract modifiers from a list of metadata.
         
@@ -105,10 +106,31 @@ class ModifierExtractor:
             metadata_list: List of metadata dictionaries
             top_k_keywords: Number of top keywords to extract
             top_k_entities: Number of top entities to extract
+            force_regenerate: Force regeneration even if files exist
             
         Returns:
             Dictionary with 'keywords' and 'entities' lists
         """
+        # Check for existing modifier files first
+        if not force_regenerate:
+            existing_modifiers = self._load_existing_modifiers()
+            if existing_modifiers:
+                logger.info("✅ Found existing keyword and entity files - reusing them!")
+                print(f"\n{'='*60}")
+                print(f"♻️  REUSING EXISTING MODIFIERS")
+                print(f"{'='*60}")
+                print(f"📁 Keywords: {existing_modifiers['keywords_file']}")
+                print(f"📁 Entities: {existing_modifiers['entities_file']}")
+                print(f"🔑 Keywords loaded: {len(existing_modifiers['keywords'])}")
+                print(f"🏷️  Entities loaded: {len(existing_modifiers['entities'])}")
+                print(f"{'='*60}\n")
+                
+                # Return existing modifiers
+                return {
+                    'keywords': existing_modifiers['keywords'][:top_k_keywords],
+                    'entities': existing_modifiers['entities'][:top_k_entities]
+                }
+        
         logger.info(f"Extracting modifiers from {len(metadata_list)} documents")
         print(f"\n{'='*60}")
         print(f"MODIFIER EXTRACTION PIPELINE")
@@ -439,3 +461,61 @@ class ModifierExtractor:
         print(f"   - Entities: {initial_entities} → {len(filtered['entities'])} (filtered {initial_entities - len(filtered['entities'])})")
         
         return filtered
+    
+    def _load_existing_modifiers(self) -> Optional[Dict]:
+        """
+        Load existing keyword and entity files if they exist.
+        
+        Returns:
+            Dictionary with loaded modifiers or None if not found
+        """
+        # Find most recent keyword and entity files
+        keyword_files = sorted(self.output_dir.glob("keywords_*.json"), reverse=True)
+        entity_files = sorted(self.output_dir.glob("entities_*.json"), reverse=True)
+        
+        if not keyword_files or not entity_files:
+            return None
+        
+        # Use the most recent files
+        keywords_file = keyword_files[0]
+        entities_file = entity_files[0]
+        
+        try:
+            # Load keywords
+            with open(keywords_file, 'r') as f:
+                keywords = json.load(f)
+            
+            # Load entities
+            with open(entities_file, 'r') as f:
+                entities = json.load(f)
+            
+            # Convert to expected format
+            # Keywords should be list of (keyword, score) tuples
+            if keywords and isinstance(keywords[0], list) and len(keywords[0]) == 2:
+                keywords_formatted = [(k[0], k[1]) for k in keywords]
+            else:
+                keywords_formatted = keywords
+            
+            # Entities might be in old format (entity, score) or new format (entity, type, score)
+            entities_formatted = []
+            if entities and isinstance(entities[0], list):
+                if len(entities[0]) == 2:  # Old format
+                    entities_formatted = [(e[0], e[1]) for e in entities]
+                elif len(entities[0]) == 3:  # New format
+                    entities_formatted = [(e[0], e[1], e[2]) for e in entities]
+            else:
+                entities_formatted = entities
+            
+            logger.info(f"Loaded {len(keywords_formatted)} keywords from {keywords_file.name}")
+            logger.info(f"Loaded {len(entities_formatted)} entities from {entities_file.name}")
+            
+            return {
+                'keywords': keywords_formatted,
+                'entities': entities_formatted,
+                'keywords_file': keywords_file.name,
+                'entities_file': entities_file.name
+            }
+            
+        except Exception as e:
+            logger.warning(f"Error loading existing modifiers: {e}")
+            return None

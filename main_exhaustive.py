@@ -142,6 +142,12 @@ def parse_arguments():
         help="Type of proxy to use (default: scraperapi)"
     )
     
+    parser.add_argument(
+        "--force-regenerate",
+        action="store_true",
+        help="Force regeneration of keywords/entities even if files exist"
+    )
+    
     return parser.parse_args()
 
 
@@ -212,7 +218,8 @@ def main():
         modifiers = extractor.extract_modifiers(
             metadata_list,
             top_k_keywords=args.top_keywords,
-            top_k_entities=args.top_entities
+            top_k_entities=args.top_entities,
+            force_regenerate=args.force_regenerate
         )
         
         # Filter out modifiers already in base query

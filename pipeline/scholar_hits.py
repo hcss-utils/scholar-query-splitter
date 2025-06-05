@@ -10,6 +10,7 @@ import time
 from typing import Dict, List, Any, Optional
 import random
 from datetime import datetime
+import os
 
 from scholarly import scholarly, ProxyGenerator
 from tqdm import tqdm
@@ -31,6 +32,8 @@ class ScholarHitsCounter:
         """
         self.use_proxy = use_proxy
         self.proxy_type = proxy_type
+        self.use_scraperapi = False
+        self.scraperapi_key = None
         
         if use_proxy:
             self._setup_proxy()
@@ -45,32 +48,39 @@ class ScholarHitsCounter:
     
     def _setup_proxy(self):
         """Set up proxy for scholarly requests."""
-        pg = ProxyGenerator()
-        
         try:
-            if self.proxy_type == 'free':
-                logger.info("Setting up free proxy...")
-                success = pg.FreeProxies()
-            elif self.proxy_type == 'luminati':
-                logger.info("Setting up Luminati proxy...")
-                # Note: Requires credentials
-                success = pg.Luminati(usr='', passwd='', proxy_port='')
-            elif self.proxy_type == 'scraperapi':
+            if self.proxy_type == 'scraperapi':
                 logger.info("Setting up ScraperAPI proxy...")
-                # Note: Requires API key
-                success = pg.ScraperAPI('')
+                # Get API key from environment
+                api_key = os.getenv('SCRAPERAPI_KEY')
+                if not api_key:
+                    logger.error("SCRAPERAPI_KEY not found in environment variables!")
+                    logger.error("Please set it in .env file or export SCRAPERAPI_KEY=your_key")
+                    return
+                logger.info(f"Using ScraperAPI with key: {api_key[:8]}...")
+                
+                # For ScraperAPI, we need to use it differently
+                # ScraperAPI works by prepending their URL to the target URL
+                self.scraperapi_key = api_key
+                self.use_scraperapi = True
+                logger.info("ScraperAPI configured for use")
+                
+            elif self.proxy_type == 'free':
+                logger.info("Setting up free proxy...")
+                pg = ProxyGenerator()
+                success = pg.FreeProxies()
+                if success:
+                    scholarly.use_proxy(pg)
+                    logger.info("Free proxy setup successful")
+                else:
+                    logger.warning("Free proxy setup failed")
+                    
             else:
-                logger.warning(f"Unknown proxy type: {self.proxy_type}")
-                return
-            
-            if success:
-                scholarly.use_proxy(pg)
-                logger.info("Proxy setup successful")
-            else:
-                logger.warning("Proxy setup failed")
+                logger.warning(f"Proxy type '{self.proxy_type}' not fully implemented")
                 
         except Exception as e:
             logger.error(f"Error setting up proxy: {e}")
+            logger.warning("Continuing without proxy - may hit rate limits")
     
     def count_hits(self, queries: List[Dict[str, Any]], 
                    save_csv: str = "query_results.csv") -> pd.DataFrame:

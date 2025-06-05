@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import time
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,24 @@ class ExhaustiveQuerySplitter:
     
     def _get_hit_count(self, query: str, year_range: Optional[Tuple[int, int]] = None) -> int:
         """Get hit count for a query."""
+        # Check for simulation mode
+        if os.environ.get('SIMULATE_SCHOLAR') == '1':
+            # Simulate realistic hit counts based on query complexity
+            import random
+            time.sleep(0.05)  # Small delay to simulate API
+            
+            # Base simulation on query characteristics
+            modifier_count = query.count('AND') - 1  # Subtract base AND
+            
+            if modifier_count >= 3:
+                return random.randint(10, 200)      # Very specific
+            elif modifier_count == 2:
+                return random.randint(200, 800)     # Specific
+            elif modifier_count == 1:
+                return random.randint(800, 2000)    # Moderate
+            else:
+                return random.randint(2000, 8000)   # Broad
+        
         if self.scholar_counter:
             # Add year range to query if specified
             if year_range:
